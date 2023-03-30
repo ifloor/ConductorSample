@@ -1,0 +1,112 @@
+version: '2.3'
+
+services:
+  conductor-server:
+    environment:
+      - CONFIG_PROP=config-local.properties
+    image: conductor:server
+    container_name: conductor-server
+    build:
+      context: ../
+      dockerfile: docker/server/Dockerfile
+    networks:
+      - internal
+    ports:
+      - 8080:8080
+    healthcheck:
+      test: ["CMD", "curl","-I" ,"-XGET", "http://localhost:8080/health"]
+      interval: 60s
+      timeout: 30s
+      retries: 12
+    links:
+      - elasticsearch:es
+      - redis:rs
+      - rabbitmq:amqp
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1k"
+        max-file: "3"
+
+  conductor-ui:
+    environment:
+      - WF_SERVER=http://conductor-server:8080
+    image: conductor:ui
+    container_name: conductor-ui
+    build:
+      context: ../
+      dockerfile: docker/ui/Dockerfile
+    networks:
+      - internal
+    ports:
+      - 5000:5000
+    links:
+      - conductor-server
+    stdin_open: true
+
+  redis:
+    image: redis:6.2.3-alpine
+    volumes:
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    ports:
+      - 6379:6379
+    healthcheck:
+      test: [ "CMD", "redis-cli","ping" ]
+
+  elasticsearch:
+    image: elasticsearch:8.6.2
+    container_name: elasticsearch
+    environment:
+      - "ES_JAVA_OPTS=-Xms512m -Xmx1024m"
+      - transport.host=0.0.0.0
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+    volumes:
+      - esdata-conductor:/usr/share/elasticsearch/data
+    networks:
+      - internal
+    ports:
+      - 9200:9200
+      - 9300:9300
+    healthcheck:
+      test: timeout 5 bash -c 'cat < /dev/null > /dev/tcp/localhost/9300'
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1k"
+        max-file: "3"
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq
+    volumes:
+      - ./.docker/rabbitmq/etc/:/etc/rabbitmq/
+      - ./.docker/rabbitmq/data/:/var/lib/rabbitmq/
+      - ./.docker/rabbitmq/logs/:/var/log/rabbitmq/
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: [ "CMD", "wget", "http://localhost:15672", "-O", "/dev/null" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    ports:
+      - 5672:5672
+      - 15672:15672
+
+volumes:
+  esdata-conductor:
+    driver: local
+
+networks:
+  internal:
